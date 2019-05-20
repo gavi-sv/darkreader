@@ -47,6 +47,15 @@ export class Extension {
         this.awaiting = [];
     }
 
+    getStatus = (url: string) => {
+        return {
+            presence: true,
+            supported: this.getURLInfo(url).isSupported,
+            enabled: this.isEnabled(),
+            darkMode: !isURLInList(url, this.user.settings.siteList)
+        };
+    }
+
     isEnabled() {
         if (this.user.settings.automation === 'time') {
             const now = new Date();
@@ -58,7 +67,7 @@ export class Extension {
     private awaiting: (() => void)[];
 
     async start() {
-        await this.config.load({local: true});
+        await this.config.load({local: false});
         this.fonts = await getFontList();
 
         await this.user.loadSettings();
@@ -108,6 +117,7 @@ export class Extension {
             resetDevInversionFixes: () => this.devtools.resetInversionFixes(),
             applyDevStaticThemes: (text) => this.devtools.applyStaticThemes(text),
             resetDevStaticThemes: () => this.devtools.resetStaticThemes(),
+            getStatus: (url: string) => this.getStatus(url),
         };
     }
 
@@ -134,6 +144,12 @@ export class Extension {
                 const index = engines.indexOf(this.user.settings.theme.engine);
                 const next = index === engines.length - 1 ? engines[0] : engines[index + 1];
                 this.setTheme({engine: next});
+            }
+        });
+
+        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+            if (changeInfo.url) {
+                this.onSettingsChanged();
             }
         });
     }
@@ -285,12 +301,12 @@ export class Extension {
             return;
         }
 
+        this.messenger.reportChangesToContentScript();
         this.wasEnabledOnLastCheck = this.isEnabled();
         this.tabs.sendMessage(this.getTabMessage);
         this.saveUserSettings();
         this.reportChanges();
     }
-
 
     //----------------------
     //
@@ -299,13 +315,15 @@ export class Extension {
     //----------------------
 
     private getURLInfo(url: string): TabInfo {
-        const {DARK_SITES} = this.config;
+        const {DARK_SITES, SUPPORTED_SITES, UNSUPPORTED_SITES} = this.config;
         const isInDarkList = isURLInList(url, DARK_SITES);
+        const isSupported = isURLInList(url, SUPPORTED_SITES) && !isURLInList(url, UNSUPPORTED_SITES);
         const isProtected = !canInjectScript(url);
         return {
             url,
             isInDarkList,
-            isProtected,
+            isProtected: isProtected,
+            isSupported,
         };
     }
 

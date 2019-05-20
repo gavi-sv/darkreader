@@ -1,4 +1,5 @@
 import {ExtensionData, FilterConfig, TabInfo, Message, UserSettings} from '../definitions';
+import { getURLHost } from 'utils/url';
 
 interface ExtensionAdapter {
     collect: () => Promise<ExtensionData>;
@@ -15,21 +16,53 @@ interface ExtensionAdapter {
     resetDevInversionFixes: () => void;
     applyDevStaticThemes: (text: string) => Error;
     resetDevStaticThemes: () => void;
+    getStatus: (url: string) => any;
 }
 
 export default class Messenger {
     private reporters: Set<(info: ExtensionData) => void>;
+    private ports: Set<chrome.runtime.Port>;
     private adapter: ExtensionAdapter;
 
     constructor(adapter: ExtensionAdapter) {
         this.reporters = new Set();
+        this.ports = new Set();
         this.adapter = adapter;
         chrome.runtime.onConnect.addListener((port) => {
             if (port.name === 'ui') {
                 port.onMessage.addListener((message) => this.onUIMessage(port, message));
                 this.adapter.onPopupOpen();
             }
+
+            if (port.name === 'tab') {
+                port.onMessage.addListener((message => this.onTabMessage(port, message)));
+            }
         });
+    }
+
+    private async onTabMessage(port: chrome.runtime.Port, { type, id, data}: Message) {
+        switch (type) {
+            case 'subscribe-to-updates-for-ui': {
+                this.ports.add(port);
+                port.onDisconnect.addListener(() => {
+                    this.ports.delete(port);
+                });
+                break;
+            }
+
+            case 'is-darkreader-installed': {
+                port.postMessage({
+                    type: 'darkreader-ui-updates',
+                    data: this.adapter.getStatus(port.sender.url)
+                });
+                break;
+            }
+
+            case 'darkreader-toggle-site': {
+                this.adapter.toggleSitePattern(getURLHost(port.sender.url || ''));
+                break;
+            }
+        }
     }
 
     private async onUIMessage(port: chrome.runtime.Port, {type, id, data}: Message) {
@@ -103,5 +136,16 @@ export default class Messenger {
 
     reportChanges(data: ExtensionData) {
         this.reporters.forEach((report) => report(data));
+    }
+
+    reportChangesToContentScript() {
+        this.ports.forEach(port => port.postMessage({
+            type: 'darkreader-ui-updates',
+            data: this.adapter.getStatus(port.sender.url)
+        }));
+    }
+
+    getPorts() {
+        return this.ports;
     }
 }
